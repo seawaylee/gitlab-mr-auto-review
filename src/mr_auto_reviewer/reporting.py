@@ -1,5 +1,6 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List
+from zoneinfo import ZoneInfo
 
 from .models import MergeRequest, ReviewResult
 
@@ -14,6 +15,8 @@ RISK_LEVEL_LABELS = {
     "medium": "中",
     "high": "高",
 }
+
+BEIJING_TIMEZONE = ZoneInfo("Asia/Shanghai")
 
 
 def _format_items(items: List[str], empty_text: str = "- None") -> str:
@@ -40,12 +43,19 @@ def _format_risk_level(value: str) -> str:
     return RISK_LEVEL_LABELS.get(key, value)
 
 
+def _format_generated_at(generated_at: datetime) -> str:
+    if generated_at.tzinfo is None:
+        generated_at = generated_at.replace(tzinfo=timezone.utc)
+    local_time = generated_at.astimezone(BEIJING_TIMEZONE)
+    return f"{local_time.strftime('%Y-%m-%d %H:%M:%S')} 北京时间"
+
+
 def build_markdown_report(
     mr: MergeRequest,
     review: ReviewResult,
     generated_at: datetime,
 ) -> str:
-    timestamp = generated_at.strftime("%Y-%m-%d %H:%M:%S %Z")
+    timestamp = _format_generated_at(generated_at)
     verdict_text = _format_verdict(review.verdict)
     risk_level_text = _format_risk_level(review.risk_level)
     return f"""# Merge Request Review 报告
@@ -89,7 +99,7 @@ def build_gitlab_comment(
     review: ReviewResult,
     generated_at: datetime,
 ) -> str:
-    timestamp = generated_at.strftime("%Y-%m-%d %H:%M:%S %Z")
+    timestamp = _format_generated_at(generated_at)
     verdict_text = _format_verdict(review.verdict)
     risk_level_text = _format_risk_level(review.risk_level)
     findings_text = _format_items(

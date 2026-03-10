@@ -77,3 +77,32 @@ def test_build_gitlab_comment_uses_industry_style_sections():
     assert "风险等级: 低" in comment
     assert "### 主要问题" in comment
     assert "### 建议动作" in comment
+
+
+def test_build_gitlab_comment_displays_generated_time_in_beijing_time():
+    mr = MergeRequest(
+        project_id=100,
+        iid=90,
+        title="chore: refresh review template",
+        web_url="https://gitlab.example.com/group/repo/-/merge_requests/90",
+        source_branch="chore/review-template",
+        target_branch="main",
+        author="diana",
+        sha="ghi789",
+    )
+    review = ReviewResult(
+        mr_purpose="调整自动化审查模板文案。",
+        summary="无功能逻辑改动。",
+        verdict="approve",
+        risk_level="low",
+        findings=[],
+        suggestions=[],
+    )
+
+    comment = build_gitlab_comment(
+        mr=mr,
+        review=review,
+        generated_at=datetime(2026, 3, 10, 2, 22, 57, tzinfo=timezone.utc),
+    )
+
+    assert "生成时间: 2026-03-10 10:22:57 北京时间" in comment
