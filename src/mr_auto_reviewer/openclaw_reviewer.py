@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Optional
 
 from .models import MergeRequest, ReviewResult
+from .review_principles import build_effective_review_principles, load_review_principles
 
 LOGGER = logging.getLogger(__name__)
 
@@ -182,21 +183,45 @@ class OpenClawReviewer:
         return str(item)
 
     def _build_prompt(self, mr: MergeRequest) -> str:
+        review_principles = build_effective_review_principles(
+            default_principles=load_review_principles(),
+            repo_review_principles=mr.repo_review_principles,
+        )
         diffs = []
         for change in mr.changes:
             diffs.append(f"### File: {change.new_path}\\n```diff\\n{change.diff}\\n```")
+        related_context_text = self._format_related_context(mr)
 
         return (
             "你是资深代码评审工程师。请基于下面 MR 信息，输出严格 JSON，不要输出任何额外文本。\\n"
             "JSON字段: mr_purpose, summary, verdict, risk_level, findings, suggestions\\n"
             "约束: verdict in [approve, comment, request_changes], risk_level in [low, medium, high]\\n\\n"
+            f"评审原则:\\n{review_principles}\\n\\n"
             f"MR title: {mr.title}\\n"
             f"MR description: {mr.description}\\n"
             f"source -> target: {mr.source_branch} -> {mr.target_branch}\\n"
             f"author: {mr.author}\\n"
             f"url: {mr.web_url}\\n"
+            f"{related_context_text}"
             f"diffs:\\n{chr(10).join(diffs)}"
         )
+
+    @staticmethod
+    def _format_related_context(mr: MergeRequest) -> str:
+        if not mr.related_context:
+            return "关联代码上下文:\\n(无)\\n"
+
+        blocks = []
+        for item in mr.related_context:
+            blocks.append(
+                "### depth={depth} reason={reason} path={path}\\n```text\\n{content}\\n```".format(
+                    depth=item.depth,
+                    reason=item.reason,
+                    path=item.path,
+                    content=item.content,
+                )
+            )
+        return "关联代码上下文:\\n" + "\\n".join(blocks) + "\\n"
 
     def _fallback(self, mr: MergeRequest, reason: str) -> ReviewResult:
         changed_files = ", ".join(change.new_path for change in mr.changes[:5]) or "未获取到 diff"

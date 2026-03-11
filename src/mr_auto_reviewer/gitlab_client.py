@@ -1,12 +1,16 @@
+import base64
 import logging
+from pathlib import PurePosixPath
 import re
 from typing import List, Optional
+from urllib.parse import quote
 
 import gitlab
 import requests
 import urllib3
 
 from .models import Change, MergeRequest
+from .related_code_loader import RelatedCodeLoader
 
 LOGGER = logging.getLogger(__name__)
 
@@ -23,6 +27,9 @@ class GitLabMRClient:
         ssl_verify=True,
         max_files: int = 20,
         max_diff_chars: int = 6000,
+        max_related_files: int = 8,
+        max_related_depth: int = 2,
+        max_related_chars: int = 4000,
     ):
         self.gitlab_url = gitlab_url
         self.reviewer_username = reviewer_username
@@ -35,6 +42,9 @@ class GitLabMRClient:
             urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
         self.max_files = max_files
         self.max_diff_chars = max_diff_chars
+        self.max_related_files = max_related_files
+        self.max_related_depth = max_related_depth
+        self.max_related_chars = max_related_chars
         self._client: Optional[gitlab.Gitlab] = None
         self._session: Optional[requests.Session] = None
 
@@ -322,6 +332,31 @@ class GitLabMRClient:
                 )
             )
 
+        sha = str(detailed.attributes.get("sha") or "")
+        if not sha:
+            diff_refs = detailed.attributes.get("diff_refs")
+            if isinstance(diff_refs, dict):
+                sha = str(diff_refs.get("head_sha") or "")
+        related_context = self._load_related_context(
+            file_loader=lambda path, ref: self._fetch_file_content_by_private_token(
+                project=project,
+                file_path=path,
+                ref=ref,
+            ),
+            path_resolver=lambda path, ref: self._resolve_repository_path_by_private_token(
+                project_id=project_id,
+                unresolved_path=path,
+                ref=ref,
+            ),
+            changes=model_changes,
+            ref=sha,
+        )
+        repo_review_principles = self._fetch_file_content_by_private_token(
+            project=project,
+            file_path="CR.md",
+            ref=sha,
+        )
+
         return MergeRequest(
             project_id=project_id,
             iid=iid,
@@ -330,9 +365,11 @@ class GitLabMRClient:
             source_branch=detailed.attributes.get("source_branch", ""),
             target_branch=detailed.attributes.get("target_branch", ""),
             author=(detailed.attributes.get("author") or {}).get("username", "unknown"),
-            sha=detailed.attributes.get("sha", ""),
+            sha=sha,
             description=detailed.attributes.get("description") or "",
             changes=model_changes,
+            related_context=related_context,
+            repo_review_principles=repo_review_principles,
         )
 
     def _load_detail_by_web_session(
@@ -369,6 +406,28 @@ class GitLabMRClient:
             if not sha:
                 diff_refs = payload.get("diff_refs") if isinstance(payload.get("diff_refs"), dict) else {}
                 sha = str((diff_refs or {}).get("head_sha") or "")
+        related_context = self._load_related_context(
+            file_loader=lambda path, ref: self._fetch_file_content_by_web_session(
+                session=session,
+                project_id=project_id,
+                file_path=path,
+                ref=ref,
+            ),
+            path_resolver=lambda path, ref: self._resolve_repository_path_by_web_session(
+                session=session,
+                project_id=project_id,
+                unresolved_path=path,
+                ref=ref,
+            ),
+            changes=model_changes,
+            ref=sha,
+        )
+        repo_review_principles = self._fetch_file_content_by_web_session(
+            session=session,
+            project_id=project_id,
+            file_path="CR.md",
+            ref=sha,
+        )
 
         return MergeRequest(
             project_id=project_id,
@@ -381,4 +440,147 @@ class GitLabMRClient:
             sha=sha,
             description=str(payload.get("description") or ""),
             changes=model_changes,
+            related_context=related_context,
+            repo_review_principles=repo_review_principles,
         )
+
+    def _load_related_context(self, file_loader, path_resolver, changes: List[Change], ref: str):
+        if not ref or not changes:
+            return []
+        loader = RelatedCodeLoader(
+            file_loader=file_loader,
+            path_resolver=path_resolver,
+            max_context_files=self.max_related_files,
+            max_depth=self.max_related_depth,
+            max_file_chars=self.max_related_chars,
+        )
+        try:
+            return loader.load(changes=changes, ref=ref)
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.warning("load related context failed: %s", exc)
+            return []
+
+    @staticmethod
+    def _decode_repository_file_content(payload) -> str:
+        if not isinstance(payload, dict):
+            return ""
+        content = payload.get("content")
+        if not content:
+            return ""
+        encoding = str(payload.get("encoding") or "").lower()
+        if encoding == "base64":
+            try:
+                decoded = base64.b64decode(content)
+                return decoded.decode("utf-8", errors="replace")
+            except Exception:
+                return ""
+        return str(content)
+
+    def _fetch_file_content_by_private_token(self, project, file_path: str, ref: str) -> str:
+        try:
+            remote_file = project.files.get(file_path=file_path, ref=ref)
+        except Exception:
+            return ""
+        payload = {
+            "content": getattr(remote_file, "content", ""),
+            "encoding": getattr(remote_file, "encoding", ""),
+        }
+        return self._decode_repository_file_content(payload)
+
+    def _fetch_file_content_by_web_session(
+        self,
+        session: requests.Session,
+        project_id: int,
+        file_path: str,
+        ref: str,
+    ) -> str:
+        try:
+            payload = self._request_json(
+                session=session,
+                path=f"/api/v4/projects/{project_id}/repository/files/{quote(file_path, safe='')}",
+                params={"ref": ref},
+            )
+        except Exception:
+            return ""
+        return self._decode_repository_file_content(payload)
+
+    def _resolve_repository_path_by_private_token(
+        self,
+        project_id: int,
+        unresolved_path: str,
+        ref: str,
+    ) -> list[str]:
+        if not self.private_token:
+            return []
+        search_term = PurePosixPath(unresolved_path).stem
+        if not search_term:
+            return []
+        try:
+            response = requests.get(
+                f"{self.gitlab_url}/api/v4/projects/{project_id}/search",
+                params={"scope": "blobs", "search": search_term, "ref": ref},
+                headers={"PRIVATE-TOKEN": self.private_token},
+                verify=self.ssl_verify,
+                timeout=30,
+            )
+            response.raise_for_status()
+            payload = response.json()
+        except Exception:
+            return []
+        return self._filter_search_paths(payload, unresolved_path)
+
+    def _resolve_repository_path_by_web_session(
+        self,
+        session: requests.Session,
+        project_id: int,
+        unresolved_path: str,
+        ref: str,
+    ) -> list[str]:
+        search_term = PurePosixPath(unresolved_path).stem
+        if not search_term:
+            return []
+        try:
+            payload = self._request_json(
+                session=session,
+                path=f"/api/v4/projects/{project_id}/search",
+                params={"scope": "blobs", "search": search_term, "ref": ref},
+            )
+        except Exception:
+            return []
+        return self._filter_search_paths(payload, unresolved_path)
+
+    @staticmethod
+    def _filter_search_paths(payload, unresolved_path: str) -> list[str]:
+        if not isinstance(payload, list):
+            return []
+
+        target = PurePosixPath(unresolved_path)
+        target_name = target.name
+        target_parts = target.parts
+        scored: list[tuple[int, str]] = []
+        for item in payload:
+            if not isinstance(item, dict):
+                continue
+            path = str(item.get("path") or item.get("filename") or "").strip()
+            if not path:
+                continue
+            candidate = PurePosixPath(path)
+            if candidate.name != target_name:
+                continue
+
+            overlap = 0
+            for left, right in zip(reversed(target_parts), reversed(candidate.parts)):
+                if left != right:
+                    break
+                overlap += 1
+            scored.append((overlap, path))
+
+        scored.sort(key=lambda item: (-item[0], item[1]))
+        output: list[str] = []
+        seen: set[str] = set()
+        for _, path in scored:
+            if path in seen:
+                continue
+            seen.add(path)
+            output.append(path)
+        return output[:3]

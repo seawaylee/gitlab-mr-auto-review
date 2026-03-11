@@ -106,3 +106,32 @@ def test_build_gitlab_comment_displays_generated_time_in_beijing_time():
     )
 
     assert "生成时间: 2026-03-10 10:22:57 北京时间" in comment
+
+
+def test_build_gitlab_comment_mentions_expanded_context_scan():
+    mr = MergeRequest(
+        project_id=100,
+        iid=91,
+        title="feat: expand review context",
+        web_url="https://gitlab.example.com/group/repo/-/merge_requests/91",
+        source_branch="feature/context",
+        target_branch="main",
+        author="eva",
+        sha="jkl012",
+    )
+    review = ReviewResult(
+        mr_purpose="为自动化审查补充有限扩展阅读。",
+        summary="reviewer 会读取关联代码上下文。",
+        verdict="comment",
+        risk_level="low",
+        findings=[],
+        suggestions=[],
+    )
+
+    comment = build_gitlab_comment(
+        mr=mr,
+        review=review,
+        generated_at=datetime(2026, 3, 11, 9, 0, tzinfo=timezone.utc),
+    )
+
+    assert "基于 MR diff 及有限扩展阅读" in comment

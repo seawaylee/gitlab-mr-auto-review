@@ -135,5 +135,5 @@ def build_gitlab_comment(
 ### 建议动作
 {suggestions_text}
 
-> 说明：这是基于 MR diff 的自动化审查结果，合并前请结合业务上下文做人工复核。
+> 说明：这是基于 MR diff 及有限扩展阅读的自动化审查结果，合并前请结合业务上下文做人工复核。
 """

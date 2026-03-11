@@ -10,6 +10,14 @@ class Change:
 
 
 @dataclass
+class CodeContext:
+    path: str
+    depth: int
+    reason: str
+    content: str
+
+
+@dataclass
 class MergeRequest:
     project_id: int
     iid: int
@@ -21,6 +29,8 @@ class MergeRequest:
     sha: str
     description: str = ""
     changes: List[Change] = field(default_factory=list)
+    related_context: List[CodeContext] = field(default_factory=list)
+    repo_review_principles: str = ""
 
     @property
     def unique_key(self) -> str:
