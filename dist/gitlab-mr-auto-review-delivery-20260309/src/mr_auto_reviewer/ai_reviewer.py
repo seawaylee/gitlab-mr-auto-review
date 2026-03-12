@@ -6,17 +6,15 @@ from typing import List, Optional
 from openai import OpenAI
 
 from .models import MergeRequest, ReviewResult
-from .review_principles import build_effective_review_principles, load_review_principles
 
 LOGGER = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = """You are a senior code reviewer for GitLab merge requests.
 Analyze code diffs and output strict JSON with fields:
-mr_purpose, summary, verdict, risk_level, findings, non_target_impacts, suggestions.
+mr_purpose, summary, verdict, risk_level, findings, suggestions.
 - verdict must be one of: approve, comment, request_changes
 - risk_level must be one of: low, medium, high
 - findings/suggestions must be arrays of short bullet strings
-- non_target_impacts must be an array of short bullet strings; if no clear impact, return []
 Use concise Chinese output.
 """
 
@@ -49,7 +47,6 @@ class AutoReviewer:
                 risk_level=payload.get("risk_level", "medium"),
                 findings=self._normalize_list(payload.get("findings")),
                 suggestions=self._normalize_list(payload.get("suggestions")),
-                non_target_impacts=self._normalize_list(payload.get("non_target_impacts")),
             )
         except Exception as exc:  # noqa: BLE001
             LOGGER.exception("AI review failed: %s", exc)
@@ -142,41 +139,17 @@ class AutoReviewer:
         return str(item)
 
     def _build_prompt(self, mr: MergeRequest) -> str:
-        review_principles = build_effective_review_principles(
-            default_principles=load_review_principles(),
-            repo_review_principles=mr.repo_review_principles,
-        )
         diff_text = []
         for change in mr.changes:
             diff_text.append(f"### File: {change.new_path}\n```diff\n{change.diff}\n```")
-        related_context_text = self._format_related_context(mr)
 
         return (
-            f"review principles:\n{review_principles}\n\n"
             f"MR title: {mr.title}\n"
             f"MR description:\n{mr.description}\n\n"
             f"source -> target: {mr.source_branch} -> {mr.target_branch}\n"
             f"author: {mr.author}\n"
-            f"{related_context_text}\n"
             f"diffs:\n{chr(10).join(diff_text)}"
         )
-
-    @staticmethod
-    def _format_related_context(mr: MergeRequest) -> str:
-        if not mr.related_context:
-            return "related code context:\n(none)\n"
-
-        blocks = []
-        for item in mr.related_context:
-            blocks.append(
-                "### depth={depth} reason={reason} path={path}\n```text\n{content}\n```".format(
-                    depth=item.depth,
-                    reason=item.reason,
-                    path=item.path,
-                    content=item.content,
-                )
-            )
-        return "related code context:\n" + "\n".join(blocks) + "\n"
 
     def _fallback(self, mr: MergeRequest, reason: str) -> ReviewResult:
         changed_files = ", ".join(change.new_path for change in mr.changes[:5]) or "未获取到 diff"
@@ -187,5 +160,4 @@ class AutoReviewer:
             risk_level="medium",
             findings=[f"AI review fallback: {reason}"],
             suggestions=["配置 OPENAI_API_KEY 后可获得更完整的代码风险分析。"],
-            non_target_impacts=[],
         )

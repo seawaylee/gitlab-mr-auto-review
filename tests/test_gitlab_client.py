@@ -23,7 +23,7 @@ class FakeSession:
         self.post_url = ""
         self.post_payload = None
 
-    def get(self, url, verify, timeout):
+    def get(self, url, verify, timeout, params=None):
         self.get_urls.append(url)
         return DummyResponse(
             text='<html><head><meta name="csrf-token" content="csrf-test-token"></head></html>'
@@ -55,7 +55,9 @@ def test_create_merge_request_comment_by_web_session_sets_csrf_headers(monkeypat
         mr_web_url="https://gitlab.example.com/group/repo/-/merge_requests/2",
     )
 
-    assert session.get_urls == ["https://gitlab.example.com/group/repo/-/merge_requests/2"]
+    assert len(session.get_urls) == 2
+    assert session.get_urls[0] == "https://gitlab.example.com/group/repo/-/merge_requests/2"
+    assert session.get_urls[1] == "https://gitlab.example.com/api/v4/projects/1/merge_requests/2/notes"
     assert session.post_url.endswith("/api/v4/projects/1/merge_requests/2/notes")
     assert session.post_payload == {"body": "hello"}
     assert session.post_headers.get("X-CSRF-Token") == "csrf-test-token"
@@ -139,14 +141,56 @@ def test_token_comment_updates_existing(monkeypatch):
         private_token="secret",
     )
     monkeypatch.setattr(client, "_connect", lambda: MockGitlabClient(MockProject(mr)))
-    
+
     client.create_merge_request_comment(
         project_id=1,
         iid=2,
         body="hello",
     )
-    
+
     assert len(mr.notes.created) == 0
     assert existing_note.body == "hello"
     assert existing_note.saved is True
+
+def test_session_comment_updates_existing(monkeypatch):
+    session = FakeSession()
+    client = GitLabMRClient(
+        gitlab_url="https://gitlab.example.com",
+        reviewer_username="bot",
+        username="alice",
+        password="secret",
+    )
+    monkeypatch.setattr(client, "_login_web_session", lambda: session)
+
+    # Mock _request_json to return [{'id': 123, 'author': {'username': 'bot'}}]
+    def mock_request_json(session, path, params=None):
+        if path.endswith("/notes"):
+            return [{'id': 123, 'author': {'username': 'bot'}}]
+        return []
+
+    monkeypatch.setattr(client, "_request_json", mock_request_json)
+
+    # Track puts
+    put_urls = []
+    put_payloads = []
+    put_headers = []
+    def mock_put_json(self, session, path, payload=None, headers=None):
+        put_urls.append(path)
+        put_payloads.append(payload)
+        put_headers.append(headers)
+
+    monkeypatch.setattr(GitLabMRClient, "_put_json", mock_put_json, raising=False)
+
+    client.create_merge_request_comment(
+        project_id=1,
+        iid=2,
+        body="hello updated",
+    )
+
+    assert len(put_urls) == 1
+    assert put_urls[0] == "/api/v4/projects/1/merge_requests/2/notes/123"
+    assert put_payloads[0] == {"body": "hello updated"}
+    assert put_headers[0] is not None
+    assert session.post_url == "" # Should not have POSTed
+
 

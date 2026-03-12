@@ -1,7 +1,7 @@
 import re
 from collections import deque
 from pathlib import PurePosixPath
-from typing import Callable, Iterable
+from typing import Callable, Iterable, List, Optional
 
 from .models import Change, CodeContext
 
@@ -9,8 +9,8 @@ from .models import Change, CodeContext
 class RelatedCodeLoader:
     def __init__(
         self,
-        file_loader: Callable[[str, str], str | None],
-        path_resolver: Callable[[str, str], list[str]] | None = None,
+        file_loader: Callable[[str, str], Optional[str]],
+        path_resolver: Optional[Callable[[str, str], List[str]]] = None,
         max_context_files: int = 8,
         max_depth: int = 2,
         max_file_chars: int = 4000,

@@ -44,7 +44,7 @@ def test_build_markdown_report_contains_required_sections():
     assert "## 建议" in markdown
 
 
-def test_build_gitlab_comment_uses_industry_style_sections():
+def test_build_gitlab_comment_uses_current_style_sections():
     mr = MergeRequest(
         project_id=100,
         iid=89,
@@ -70,12 +70,15 @@ def test_build_gitlab_comment_uses_industry_style_sections():
         generated_at=datetime(2026, 3, 3, 10, 0, tzinfo=timezone.utc),
     )
 
-    assert "## 自动化 Code Review（行业规范）" in comment
+    assert "## 自动化 Code Review" in comment
+    assert "行业规范" not in comment
     assert "### 变更意图" in comment
     assert "### 审查结论" in comment
     assert "建议关注" in comment
     assert "风险等级: 低" in comment
     assert "### 主要问题" in comment
+    assert "- [低] 登录失败分支仍有一个路径返回旧字段名。" in comment
+    assert "### 对非本次修改意图的影响" in comment
     assert "### 建议动作" in comment
 
 
@@ -108,7 +111,7 @@ def test_build_gitlab_comment_displays_generated_time_in_beijing_time():
     assert "生成时间: 2026-03-10 10:22:57 北京时间" in comment
 
 
-def test_build_gitlab_comment_mentions_expanded_context_scan():
+def test_build_gitlab_comment_mentions_current_review_inputs():
     mr = MergeRequest(
         project_id=100,
         iid=91,
@@ -134,4 +137,35 @@ def test_build_gitlab_comment_mentions_expanded_context_scan():
         generated_at=datetime(2026, 3, 11, 9, 0, tzinfo=timezone.utc),
     )
 
-    assert "基于 MR diff 及有限扩展阅读" in comment
+    assert "已结合 MR 改动、有限扩展阅读以及仓库规则（如存在）" in comment
+
+
+def test_build_gitlab_comment_shows_non_target_impacts_when_present():
+    mr = MergeRequest(
+        project_id=100,
+        iid=92,
+        title="feat: split cache routes",
+        web_url="https://gitlab.example.com/group/repo/-/merge_requests/92",
+        source_branch="feature/cache",
+        target_branch="main",
+        author="frank",
+        sha="mno345",
+    )
+    review = ReviewResult(
+        mr_purpose="拆分作者页缓存路由。",
+        summary="核心改动清晰。",
+        verdict="comment",
+        risk_level="medium",
+        findings=["缓存语义发生变化。"],
+        non_target_impacts=["作者相关旧链路如果漏传 isPage，可能读到错误缓存。"],
+        suggestions=["补一轮旧链路回归验证。"],
+    )
+
+    comment = build_gitlab_comment(
+        mr=mr,
+        review=review,
+        generated_at=datetime(2026, 3, 11, 9, 30, tzinfo=timezone.utc),
+    )
+
+    assert "### 对非本次修改意图的影响" in comment
+    assert "作者相关旧链路如果漏传 isPage，可能读到错误缓存。" in comment

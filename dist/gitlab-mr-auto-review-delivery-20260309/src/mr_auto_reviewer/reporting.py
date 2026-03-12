@@ -1,6 +1,5 @@
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import List
-from zoneinfo import ZoneInfo
 
 from .models import MergeRequest, ReviewResult
 
@@ -16,14 +15,8 @@ RISK_LEVEL_LABELS = {
     "high": "高",
 }
 
-BEIJING_TIMEZONE = ZoneInfo("Asia/Shanghai")
 
-
-def _format_items(
-    items: List[str],
-    empty_text: str = "- None",
-    default_risk_label: str = "",
-) -> str:
+def _format_items(items: List[str], empty_text: str = "- None") -> str:
     if not items:
         return empty_text
     lines = []
@@ -31,10 +24,7 @@ def _format_items(
         segments = [seg for seg in str(item).splitlines() if seg.strip()]
         if not segments:
             continue
-        first_segment = segments[0]
-        if default_risk_label and not first_segment.lstrip().startswith("["):
-            first_segment = f"[{default_risk_label}] {first_segment}"
-        lines.append(f"- {first_segment}")
+        lines.append(f"- {segments[0]}")
         for seg in segments[1:]:
             lines.append(f"  {seg}")
     return "\n".join(lines) if lines else empty_text
@@ -50,19 +40,12 @@ def _format_risk_level(value: str) -> str:
     return RISK_LEVEL_LABELS.get(key, value)
 
 
-def _format_generated_at(generated_at: datetime) -> str:
-    if generated_at.tzinfo is None:
-        generated_at = generated_at.replace(tzinfo=timezone.utc)
-    local_time = generated_at.astimezone(BEIJING_TIMEZONE)
-    return f"{local_time.strftime('%Y-%m-%d %H:%M:%S')} 北京时间"
-
-
 def build_markdown_report(
     mr: MergeRequest,
     review: ReviewResult,
     generated_at: datetime,
 ) -> str:
-    timestamp = _format_generated_at(generated_at)
+    timestamp = generated_at.strftime("%Y-%m-%d %H:%M:%S %Z")
     verdict_text = _format_verdict(review.verdict)
     risk_level_text = _format_risk_level(review.risk_level)
     return f"""# Merge Request Review 报告
@@ -106,24 +89,19 @@ def build_gitlab_comment(
     review: ReviewResult,
     generated_at: datetime,
 ) -> str:
-    timestamp = _format_generated_at(generated_at)
+    timestamp = generated_at.strftime("%Y-%m-%d %H:%M:%S %Z")
     verdict_text = _format_verdict(review.verdict)
     risk_level_text = _format_risk_level(review.risk_level)
     findings_text = _format_items(
         review.findings,
         empty_text="- 未发现阻断合并的问题。",
-        default_risk_label=risk_level_text,
-    )
-    impacts_text = _format_items(
-        review.non_target_impacts,
-        empty_text="- 未识别到对非本次修改意图业务的明确影响。",
     )
     suggestions_text = _format_items(
         review.suggestions,
         empty_text="- 可直接进入人工抽样复核后合并。",
     )
 
-    return f"""## 自动化 Code Review
+    return f"""## 自动化 Code Review（行业规范）
 
 ### 范围
 - MR: [{mr.title}]({mr.web_url})
@@ -144,11 +122,8 @@ def build_gitlab_comment(
 ### 主要问题
 {findings_text}
 
-### 对非本次修改意图的影响
-{impacts_text}
-
 ### 建议动作
 {suggestions_text}
 
-> 说明：这是自动化审查意见，已结合 MR 改动、有限扩展阅读以及仓库规则（如存在）；合并前请结合业务上下文做人工复核。
+> 说明：这是基于 MR diff 的自动化审查结果，合并前请结合业务上下文做人工复核。
 """

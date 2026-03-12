@@ -100,7 +100,7 @@ def test_run_once_processes_only_unprocessed_mrs(tmp_path):
     assert len(gitlab.comments) == 1
     assert gitlab.comments[0][0] == mr_new.project_id
     assert gitlab.comments[0][1] == mr_new.iid
-    assert "## 自动化 Code Review" in gitlab.comments[0][2]
+    assert "## 自动化 Code Review（行业规范）" in gitlab.comments[0][2]
     assert gitlab.events == ["gitlab_comment", "feishu_doc", "sohu_push"]
     assert state.is_processed(mr_new.unique_key)
 
