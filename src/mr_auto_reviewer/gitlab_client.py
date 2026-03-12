@@ -86,6 +86,19 @@ class GitLabMRClient:
             client = self._connect()
             project = client.projects.get(project_id)
             merge_request = project.mergerequests.get(iid)
+            bot_username = self.reviewer_username or self.username
+
+            # Find existing note
+            notes = merge_request.notes.list(all=True)
+            for note in notes:
+                if getattr(note.author, "username", "") == bot_username or (
+                    isinstance(note.author, dict) and note.author.get("username") == bot_username
+                ):
+                    note.body = content
+                    note.save()
+                    return
+
+            # If not found, create new
             merge_request.notes.create({"body": content})
             return
 
