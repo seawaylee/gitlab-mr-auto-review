@@ -105,6 +105,23 @@ class GitLabMRClient:
         if self.username and self.password:
             session = self._login_web_session()
             headers = self._build_session_api_headers(session=session, mr_web_url=mr_web_url)
+
+            notes_payload = self._request_json(
+                 session=session,
+                 path=f"/api/v4/projects/{project_id}/merge_requests/{iid}/notes",
+            )
+            bot_username = self.reviewer_username or self.username
+
+            for note in notes_payload:
+                if isinstance(note, dict) and note.get('author', {}).get('username') == bot_username:
+                    self._put_json(
+                        session=session,
+                        path=f"/api/v4/projects/{project_id}/merge_requests/{iid}/notes/{note['id']}",
+                        payload={"body": content},
+                        headers=headers,
+                    )
+                    return
+
             self._post_json(
                 session=session,
                 path=f"/api/v4/projects/{project_id}/merge_requests/{iid}/notes",
@@ -270,6 +287,25 @@ class GitLabMRClient:
         headers: Optional[dict] = None,
     ):
         response = session.post(
+            f"{self.gitlab_url}{path}",
+            json=payload or {},
+            headers=headers or {},
+            verify=self.ssl_verify,
+            timeout=30,
+        )
+        response.raise_for_status()
+        if not response.content:
+            return {}
+        return response.json()
+
+    def _put_json(
+        self,
+        session: requests.Session,
+        path: str,
+        payload: Optional[dict] = None,
+        headers: Optional[dict] = None,
+    ):
+        response = session.put(
             f"{self.gitlab_url}{path}",
             json=payload or {},
             headers=headers or {},
